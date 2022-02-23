@@ -36,7 +36,7 @@ static const struct regmap_access_table qmc5883_volatile_table = {
 	.n_yes_ranges = ARRAY_SIZE(qmc5883_volatile_ranges),
 };
 
-static const struct regmap_config qmx5883_i2c_regmap_config = {
+static const struct regmap_config qmc5883_i2c_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 
@@ -50,9 +50,17 @@ static const struct regmap_config qmx5883_i2c_regmap_config = {
 static int qmc5883_i2c_probe(struct i2c_client *cli,
 				const struct i2c_device_id *id)
 {
+	struct regmap *regmap = devm_regmap_init_i2c(cli,
+			&qmc5883_i2c_regmap_config);
+
+	if (IS_ERR(regmap))
+		return PTR_ERR(regmap);	
+	
 	pr_info("Amar -------------> qmc5883_i2c_probe++\n");
 
-	return 0;
+	return qmc5883_common_probe(&cli->dev,
+			regmap,
+			id->driver_data, id->name);
 }
 
 /*

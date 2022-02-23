@@ -48,6 +48,9 @@ struct qmc5883_data {
 	} scan;
 };
 
+int qmc5883_common_probe(struct device *dev, struct regmap *regmap,
+			enum qmc5883_ids id, const char *name);
+
 #define QMC5883_PM_OPS	NULL
 
 #endif /* QMC5883_CORE_H */
