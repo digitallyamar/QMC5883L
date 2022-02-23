@@ -1,0 +1,10 @@
+#include <dt-bindings/platform/t210/t210.h>
+
+/ {
+	i2c@7000c000 {
+		qmc5883@0d {
+			compatible = "qst,qmc5883";
+			reg = <0x0d>;
+		};
+	};
+};
