@@ -7,8 +7,17 @@
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/triggered_buffer.h>
+#include <linux/delay.h>
 
 #include "qmc5883.h"
+
+/* Device status */
+#define QMC5883_DATA_READY			0x1
+
+/* Mode configuration */
+#define QMC5883_MODE_STANDBY			0x00
+#define QMC5883_MODE_CONTINUOUS			0x01
+#define QMC5883_MODE_MASK			0x03
 
 /*
  * QMC5883: Minimum data output rate
@@ -35,65 +44,106 @@ static const int qmc5883_regval_to_samp_freq[][2] = {
 };
 
 
+/* 
+ * From datasheet:
+ * Value		/ QMC5883
+ * 			/ Over Sample Ratio
+ * 0			/ 512
+ * 1			/ 256
+ * 2			/ 128
+ * 3			/ 64
+ */
+
+static const int qmc5883_regval_to_over_sample_ratio[][2] = {
+	{512, 0}, {256, 0}, {128, 0}, {64, 0}
+};
+
 /* Describe chip varints */
 struct qmc5883_chip_info {
 	const struct iio_chan_spec *channels;
 	const int (*regval_to_samp_freq)[2];
 	const int n_regval_to_samp_freq;
-	//const int *regval_to_nanoscale;
-	//const int n_regval_to_nanoscale;
+	const int (*regval_to_over_sample_ratio)[2];
+	const int n_regval_to_over_sample_ratio;
 };
 
-
-static ssize_t qmc5883_show_samp_freq_avail(struct device *dev,
-				struct device_attribute *attr, char *buf)
+static s32 qmc5883_set_mode(struct qmc5883_data *data, u8 operating_mode)
 {
-	struct qmc5883_data *data = iio_priv(dev_to_iio_dev(dev));
-	size_t len = 0;
-	int i;
+	int ret = 0;
+	int ret2, val;
 
-	pr_info("qmc5883_show_samp_freq_avaol++\n");
+	//Amar: TODO Remove below regmap_read and debug prints later
+	pr_info("qmc5883_set_mode++, oper_mode=%d\n", operating_mode);
+	ret2 = regmap_read(data->regmap, QMC5883_CONTROL_REG_1, &val);
+	pr_info("qmc5883_set_mode[1]: ctrl_reg1 = 0x%x \n", val);
 
-	for (i = 0; i < data->variant->n_regval_to_samp_freq; i++)
-		len += scnprintf(buf + len, PAGE_SIZE - len,
-			"%d.%d", data->variant->regval_to_samp_freq[i][0],
-			data->variant->regval_to_samp_freq[i][1]);
-
-	buf[len - 1] = '\n';
-
-	return len;
-}
-
-static IIO_DEV_ATTR_SAMP_FREQ_AVAIL(qmc5883_show_samp_freq_avail);
-
-
-static int qmc5883_set_samp_freq(struct qmc5883_data *data, u8 rate)
-{
-	int ret;
 
 	mutex_lock(&data->lock);
 	ret = regmap_update_bits(data->regmap, QMC5883_CONTROL_REG_1,
-				QMC5883_RATE_MASK,
-				rate << QMC5883_RATE_OFFSET);
+				QMC5883_MODE_MASK, operating_mode);
 	mutex_unlock(&data->lock);
+
+	//Amar: TODO Remove below regmap_read and debug prints later
+	ret2 = regmap_read(data->regmap, QMC5883_CONTROL_REG_1, &val);
+	pr_info("qmc5883_set_mode[2]: ctrl_reg1 = 0x%x \n", val);
 
 	return ret;
 }
 
-static int qmc5883_get_samp_freq_index(struct qmc5883_data *data,
-					int val, int val2)
+static int qmc5883_wait_measurement(struct qmc5883_data *data)
 {
-	int i;
+	int tries = 150;
+	unsigned int val;
+	int ret;
 
-	for (i = 0; i < data->variant->n_regval_to_samp_freq; i++)
-		if (val == data->variant->regval_to_samp_freq[0][0] &&
-		val2 == data->variant->regval_to_samp_freq[i][1])
-			return i;
+	pr_info("qmc5883_wait_measurement++\n");
 
-	return -EINVAL;
+	while (tries-- > 0) {
+		ret = regmap_read(data->regmap, QMC5883_STATUS_REG, &val);
+		if (ret < 0)
+			return ret;
+		if (val & QMC5883_DATA_READY)
+			break;
+		msleep(20);
+	}
+
+	if (tries < 0) {
+		dev_err(data->dev, "data not ready\n");
+		return -EIO;
+	}
+
+	return 0;
 }
 
+static int qmc5883_read_measurement(struct qmc5883_data *data,
+				int idx, int *val)
+{
+	s16 values[3];
+	int ret;
 
+	mutex_lock(&data->lock);
+	ret = qmc5883_wait_measurement(data);
+	if (ret < 0) {
+		mutex_unlock(&data->lock);
+		return ret;
+	}
+	ret = regmap_bulk_read(data->regmap, QMC5883_DATA_OUT_LSB_REGS,
+				values, sizeof(values));
+	mutex_unlock(&data->lock);
+
+	if (ret < 0)
+		return ret;
+
+	//Amar: TODO: Remove below debug print code
+	pr_info("Amar: read_meas++\n");
+
+	for (ret = 0; ret < 3; ret++)
+		pr_info("values[%d] = %d\n", ret, values[ret]);
+
+	*val = sign_extend32(values[idx], 15);
+
+	return IIO_VAL_INT;
+}
 
 static int qmc5883_set_meas_conf(struct qmc5883_data *data, u8 meas_conf)
 {
@@ -129,32 +179,118 @@ qmc5883_get_mount_matrix(const struct iio_dev *indio_dev,
 	return &data->orientation;
 }
 
+static const struct iio_enum qmc5883_meas_conf_enum = {
+	.items = qmc5883_meas_conf_modes,
+	.num_items = ARRAY_SIZE(qmc5883_meas_conf_modes),
+	.get= qmc5883_show_measurement_configuration,
+	.set = qmc5883_set_measurement_configuration,
+};
+
+static const struct iio_chan_spec_ext_info qmc5883_ext_info[] = {
+	IIO_ENUM("meas_conf", IIO_SHARED_BY_TYPE, &qmc5883_meas_conf_enum),
+	IIO_ENUM_AVAILABLE("meas_conf", &qmc5883_meas_conf_enum),
+	IIO_MOUNT_MATRIX(IIO_SHARED_BY_DIR, qmc5883_get_mount_matrix),
+	{ }
+};
+
+static ssize_t qmc5883_show_samp_freq_avail(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct qmc5883_data *data = iio_priv(dev_to_iio_dev(dev));
+	size_t len = 0;
+	int i;
+
+	pr_info("qmc5883_show_samp_freq_avail++\n");
+
+	for (i = 0; i < data->variant->n_regval_to_samp_freq; i++)
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+			"%d.%d", data->variant->regval_to_samp_freq[i][0],
+			data->variant->regval_to_samp_freq[i][1]);
+
+	buf[len - 1] = '\n';
+
+	return len;
+}
+
+static IIO_DEV_ATTR_SAMP_FREQ_AVAIL(qmc5883_show_samp_freq_avail);
+
+static int qmc5883_set_samp_freq(struct qmc5883_data *data, u8 rate)
+{
+	int ret;
+
+	pr_info("qmc5883_set_samp_freq++\n");
+
+	mutex_lock(&data->lock);
+	ret = regmap_update_bits(data->regmap, QMC5883_CONTROL_REG_1,
+				QMC5883_RATE_MASK,
+				rate << QMC5883_RATE_OFFSET);
+	mutex_unlock(&data->lock);
+
+	return ret;
+}
+
+static int qmc5883_get_samp_freq_index(struct qmc5883_data *data,
+					int val, int val2)
+{
+	int i;
+
+	for (i = 0; i < data->variant->n_regval_to_samp_freq; i++)
+		if (val == data->variant->regval_to_samp_freq[0][0] &&
+		val2 == data->variant->regval_to_samp_freq[i][1])
+			return i;
+
+	return -EINVAL;
+}
+
+static ssize_t qmc5883_show_over_sample_ratio_avail(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct qmc5883_data *data = iio_priv(dev_to_iio_dev(dev));
+	size_t len = 0;
+	int i;
+
+	pr_info("qmc5883_show_over_sample_ratio_avail++\n");
+
+	for (i = 0; i < data->variant->n_regval_to_over_sample_ratio; i++)
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+		"%d.%d ", data->variant->regval_to_over_sample_ratio[i][0],
+		data->variant->regval_to_over_sample_ratio[i][1]);
+
+	buf[len - 1] = '\n';
+
+	return len;
+}
+
+static IIO_DEVICE_ATTR(over_sample_ratio_available, S_IRUGO,
+		qmc5883_show_over_sample_ratio_avail, NULL, 0);
+
 static int qmc5883_read_raw(struct iio_dev *indio_dev,
 			struct iio_chan_spec const *chan,
 			int *val, int *val2, long mask)
 {
-	//struct qmc5883_data *data = iio_priv(indio_dev);
+	struct qmc5883_data *data = iio_priv(indio_dev);
+	unsigned int rval;
 	int ret = 0;
 
 	pr_info("qmc5883_read_raw++\n");
-	
+	pr_info("qmc5883_read_raw: chan->scan_index = %d\n", chan->scan_index);
+	pr_info("qmc5883_read_raw: chan->address = %ld\n", chan->address);
+
+	switch (mask) {
+		case IIO_CHAN_INFO_RAW:
+			pr_info("qmc5883_read_raw: IIO_CHAN_INFO_RAW\n");
+			return qmc5883_read_measurement(data, chan->scan_index, val);
+		case IIO_CHAN_INFO_SAMP_FREQ:
+			ret = regmap_read(data->regmap, QMC5883_CONTROL_REG_1, &rval);
+			if (ret < 0)
+				return ret;
+			rval >>= QMC5883_RATE_OFFSET;
+			*val = data->variant->regval_to_samp_freq[rval][0];
+			*val2 = data->variant->regval_to_samp_freq[rval][1];
+			return IIO_VAL_INT_PLUS_MICRO;
+	}
 	return ret;
 }
-
-static int qmc5883_write_raw_get_fmt(struct iio_dev *indio_dev,
-			struct iio_chan_spec const *chan,
-			long mask)
-{
-	//struct qmc5883_data *data = iio_priv(indio_dev);
-	int ret = 0;
-
-	pr_info("qmc5883_write_raw_get_fmt++\n");
-
-	return ret;
-}
-
-
-
 
 static int qmc5883_write_raw(struct iio_dev *indio_dev,
 			struct iio_chan_spec const *chan,
@@ -164,41 +300,65 @@ static int qmc5883_write_raw(struct iio_dev *indio_dev,
 	int rate;
 
 	pr_info("qmc5883_write_raw++\n");
-
-	switch(mask) {
+	
+	switch (mask) {
 		case IIO_CHAN_INFO_SAMP_FREQ:
 			rate = qmc5883_get_samp_freq_index(data, val, val2);
 			if (rate < 0)
 				return -EINVAL;
 
+			return qmc5883_set_samp_freq(data, rate);
+
 		default:
 			return -EINVAL;
 	}
+}
 
+static int qmc5883_write_raw_get_fmt(struct iio_dev *indio_dev,
+			struct iio_chan_spec const *chan,
+			long mask)
+{
+	pr_info("qmc5883_write_raw_get_fmt++\n");
+
+	switch(mask) {
+		case IIO_CHAN_INFO_SAMP_FREQ:
+			return IIO_VAL_INT_PLUS_MICRO;
+		default:
+			return -EINVAL;
+	}
 }
 
 static irqreturn_t qmc5883_trigger_handler(int irq, void *p)
 {
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+	struct qmc5883_data *data = iio_priv(indio_dev);
+	int ret;
+
 	pr_info("qmc5883_trigger_handler++\n");
+
+	mutex_lock(&data->lock);
+	ret = qmc5883_wait_measurement(data);
+	if (ret < 0) {
+		mutex_unlock(&data->lock);
+		goto done;
+	}
+
+	ret = regmap_bulk_read(data->regmap, QMC5883_DATA_OUT_LSB_REGS,
+			data->scan.chans, sizeof(data->scan.chans));
+
+	mutex_unlock(&data->lock);
+	if (ret < 0)
+		goto done;
+	
+	iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
+					iio_get_time_ns(indio_dev));
+
+done:
+	iio_trigger_notify_done(indio_dev->trig);
 
 	return IRQ_HANDLED;
 }
-
-
-static const struct iio_enum qmc5883_meas_conf_enum = {
-	.items = qmc5883_meas_conf_modes,
-	.num_items = ARRAY_SIZE(qmc5883_meas_conf_modes),
-	.get= qmc5883_show_measurement_configuration,
-	.set = qmc5883_set_measurement_configuration,
-
-};
-
-static const struct iio_chan_spec_ext_info qmc5883_ext_info[] = {
-	IIO_ENUM("meas_conf", IIO_SHARED_BY_TYPE, &qmc5883_meas_conf_enum),
-	IIO_ENUM_AVAILABLE("meas_conf", &qmc5883_meas_conf_enum),
-	IIO_MOUNT_MATRIX(IIO_SHARED_BY_DIR, qmc5883_get_mount_matrix),
-	{}
-};
 
 #define QMC5883_CHANNEL(axis, idx)					\
 	{								\
@@ -226,7 +386,7 @@ static const struct iio_chan_spec qmc5883_channels[] = {
 };
 
 static struct attribute *qmc5883_attributes[] = {
-	//&iio_dev_attr_scale_available.dev_attr.attr,
+	&iio_dev_attr_over_sample_ratio_available.dev_attr.attr,
 	&iio_dev_attr_sampling_frequency_available.dev_attr.attr,
 	NULL
 };
@@ -235,9 +395,6 @@ static const struct attribute_group qmc5883_group = {
 	.attrs = qmc5883_attributes,
 };
 
-
-
-static const unsigned long qmc5883_scan_masks[] = {0x7, 0};
 
 static const struct qmc5883_chip_info qmc5883_chip_info_tbl[] = {
 	[QMC5883_ID] = {
@@ -249,6 +406,18 @@ static const struct qmc5883_chip_info qmc5883_chip_info_tbl[] = {
 	}
 };
 
+static int qmc5883_init(struct qmc5883_data *data)
+{
+	int ret;
+
+	pr_info("qmc5883_init++\n");
+
+	ret = qmc5883_set_samp_freq(data, QMC5883_RATE_DEFAULT);
+	if (ret < 0)
+		return ret;
+
+	return qmc5883_set_mode(data, QMC5883_MODE_CONTINUOUS);
+}
 
 static const struct iio_info qmc5883_info = {
 	.attrs = &qmc5883_group,
@@ -257,16 +426,21 @@ static const struct iio_info qmc5883_info = {
 	.write_raw_get_fmt = &qmc5883_write_raw_get_fmt,
 };
 
-static int qmc5883_init(struct qmc5883_data *data)
+static const unsigned long qmc5883_scan_masks[] = {0x7, 0};
+
+int qmc5883_common_suspend(struct device *dev)
 {
-	int ret;
-
-	pr_info("qmc5883_init++\n");
-
-	ret = qmc5883_set_samp_freq(data, QMC5883_RATE_DEFAULT);
-
-	return ret;
+	return qmc5883_set_mode(iio_priv(dev_get_drvdata(dev)),
+					QMC5883_MODE_STANDBY);
 }
+EXPORT_SYMBOL(qmc5883_common_suspend);
+
+int qmc5883_common_resume(struct device *dev)
+{
+	return qmc5883_set_mode(iio_priv(dev_get_drvdata(dev)),
+					QMC5883_MODE_CONTINUOUS);
+}
+EXPORT_SYMBOL(qmc5883_common_resume);
 
 int qmc5883_common_probe(struct device *dev, struct regmap *regmap,
 			enum qmc5883_ids id, const char *name)
@@ -324,18 +498,22 @@ buffer_cleanup:
 	iio_triggered_buffer_cleanup(indio_dev);
 
 buffer_setup_err:
-	//qmc5883_set_mode(iio_priv(indio_dev), QMC5883_MODE_SLEEP);
+	qmc5883_set_mode(iio_priv(indio_dev), QMC5883_MODE_STANDBY);
 	return ret;
 }
-
 EXPORT_SYMBOL(qmc5883_common_probe);
 
 void qmc5883_common_remove(struct device *dev)
 {
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
+
+	iio_device_unregister(indio_dev);
+	iio_triggered_buffer_cleanup(indio_dev);
+
+	/* push to standby mode to save power */
+	qmc5883_set_mode(iio_priv(indio_dev), QMC5883_MODE_STANDBY);
 }
-
 EXPORT_SYMBOL(qmc5883_common_remove);
-
 
 MODULE_AUTHOR("Amarnath Revanna");
 MODULE_DESCRIPTION("QMC5883 Core Driver");
