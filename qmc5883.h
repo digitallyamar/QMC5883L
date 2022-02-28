@@ -50,7 +50,20 @@ struct qmc5883_data {
 
 int qmc5883_common_probe(struct device *dev, struct regmap *regmap,
 			enum qmc5883_ids id, const char *name);
+void qmc5883_common_remove(struct device *dev);
 
+int qmc5883_common_suspend(struct device *dev);
+int qmc5883_common_resume(struct device *dev);
+
+
+
+#ifdef CONFIG_PM_SLEEP
+static __maybe_unused SIMPLE_DEV_PM_OPS(qmc5883_pm_ops,
+					qmc5883_common_suspend,
+					qmc5883_common_resume);
+#define QMC5883_PM_OPS (&qmc5883_pm_ops)
+#else
 #define QMC5883_PM_OPS	NULL
+#endif
 
 #endif /* QMC5883_CORE_H */

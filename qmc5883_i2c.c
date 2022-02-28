@@ -102,6 +102,7 @@ static struct i2c_driver qmc5883_driver = {
 	.driver = {
 		.owner = THIS_MODULE,
 		.name = "qmc5883",
+		.pm = QMC5883_PM_OPS,
 		.of_match_table = of_match_ptr(qmc5883_of_match),
 	},
 	.probe = qmc5883_i2c_probe,
