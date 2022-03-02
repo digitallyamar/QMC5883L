@@ -26,6 +26,10 @@
 #define QMC5883_RATE_DEFAULT			0x00
 #define QMC5883_RATE_MASK			0x0C
 
+#define QMC5883_OVERSAMPLING_OFFSET		0x06
+#define QMC5883_OVERSAMPLING_DEFAULT		0x00
+#define QMC5883_OVERSAMPLING_MASK		0xC0
+
 static const char *const qmc5883_meas_conf_modes[] = {"normal", "positivebias",
 							"negativebias"};
 
@@ -54,7 +58,7 @@ static const int qmc5883_regval_to_samp_freq[][2] = {
  * 3			/ 64
  */
 
-static const int qmc5883_regval_to_over_sample_ratio[][2] = {
+static const int qmc5883_regval_to_oversampling_ratio[][2] = {
 	{512, 0}, {256, 0}, {128, 0}, {64, 0}
 };
 
@@ -63,8 +67,8 @@ struct qmc5883_chip_info {
 	const struct iio_chan_spec *channels;
 	const int (*regval_to_samp_freq)[2];
 	const int n_regval_to_samp_freq;
-	const int (*regval_to_over_sample_ratio)[2];
-	const int n_regval_to_over_sample_ratio;
+	const int (*regval_to_oversampling_ratio)[2];
+	const int n_regval_to_oversampling_ratio;
 };
 
 static s32 qmc5883_set_mode(struct qmc5883_data *data, u8 operating_mode)
@@ -242,27 +246,34 @@ static int qmc5883_get_samp_freq_index(struct qmc5883_data *data,
 	return -EINVAL;
 }
 
-static ssize_t qmc5883_show_over_sample_ratio_avail(struct device *dev,
+static ssize_t qmc5883_show_oversampling_ratio_avail(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct qmc5883_data *data = iio_priv(dev_to_iio_dev(dev));
 	size_t len = 0;
 	int i;
 
-	pr_info("qmc5883_show_over_sample_ratio_avail++\n");
+	pr_info("qmc5883_show_oversampling_ratio_avail++\n");
+	pr_info("qmc5883_show_oversampling_ratio_avail: buf = %p\n", buf);
+	pr_info("qmc5883_show_oversampling_ratio_avail: buf = %d\n",
+			data->variant->n_regval_to_oversampling_ratio);
 
-	for (i = 0; i < data->variant->n_regval_to_over_sample_ratio; i++)
+	for (i = 0; i < data->variant->n_regval_to_oversampling_ratio; i++) {
+		pr_info("Loading to buf=%d.%d\n", data->variant->regval_to_oversampling_ratio[i][0], data->variant->regval_to_oversampling_ratio[i][1]);
+
 		len += scnprintf(buf + len, PAGE_SIZE - len,
-		"%d.%d ", data->variant->regval_to_over_sample_ratio[i][0],
-		data->variant->regval_to_over_sample_ratio[i][1]);
+		"%d.%d ", data->variant->regval_to_oversampling_ratio[i][0],
+		data->variant->regval_to_oversampling_ratio[i][1]);
+	}
 
 	buf[len - 1] = '\n';
 
+	pr_info("qmc5883_show_oversampling_ratio_avail: ret len= %ld\n", len);
 	return len;
 }
 
-static IIO_DEVICE_ATTR(over_sample_ratio_available, S_IRUGO,
-		qmc5883_show_over_sample_ratio_avail, NULL, 0);
+static IIO_DEVICE_ATTR(oversampling_ratio_available, S_IRUGO,
+		qmc5883_show_oversampling_ratio_avail, NULL, 0);
 
 static int qmc5883_read_raw(struct iio_dev *indio_dev,
 			struct iio_chan_spec const *chan,
@@ -280,13 +291,26 @@ static int qmc5883_read_raw(struct iio_dev *indio_dev,
 		case IIO_CHAN_INFO_RAW:
 			pr_info("qmc5883_read_raw: IIO_CHAN_INFO_RAW\n");
 			return qmc5883_read_measurement(data, chan->scan_index, val);
+		case IIO_CHAN_INFO_SCALE:
+			pr_info("qmc5883_read_raw: IIO_CHAN_INFO_SCALE\n");
+			break;
 		case IIO_CHAN_INFO_SAMP_FREQ:
+			pr_info("qmc5883_read_raw: IIO_CHAN_INFO_SAMP_FREQ\n");
 			ret = regmap_read(data->regmap, QMC5883_CONTROL_REG_1, &rval);
 			if (ret < 0)
 				return ret;
 			rval >>= QMC5883_RATE_OFFSET;
 			*val = data->variant->regval_to_samp_freq[rval][0];
 			*val2 = data->variant->regval_to_samp_freq[rval][1];
+			return IIO_VAL_INT_PLUS_MICRO;
+		case IIO_CHAN_INFO_OVERSAMPLING_RATIO:
+			pr_info("qmc5883_read_raw: IIO_CHAN_INFO_OVERSAMPLING_RATIO\n");
+			ret = regmap_read(data->regmap, QMC5883_CONTROL_REG_1, &rval);
+			if (ret < 0)
+				return ret;
+			rval >>= QMC5883_OVERSAMPLING_OFFSET;
+			*val = data->variant->regval_to_oversampling_ratio[rval][0];
+			*val2 = data->variant->regval_to_oversampling_ratio[rval][1];
 			return IIO_VAL_INT_PLUS_MICRO;
 	}
 	return ret;
@@ -367,7 +391,8 @@ done:
 		.channel2 = IIO_MOD_##axis,				\
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),		\
 		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |	\
-			BIT(IIO_CHAN_INFO_SAMP_FREQ),			\
+			BIT(IIO_CHAN_INFO_SAMP_FREQ) |			\
+	       		BIT(IIO_CHAN_INFO_OVERSAMPLING_RATIO),		\
 		.scan_index = idx,					\
 		.scan_type = {						\
 			.sign = 's',					\
@@ -386,7 +411,7 @@ static const struct iio_chan_spec qmc5883_channels[] = {
 };
 
 static struct attribute *qmc5883_attributes[] = {
-	&iio_dev_attr_over_sample_ratio_available.dev_attr.attr,
+	&iio_dev_attr_oversampling_ratio_available.dev_attr.attr,
 	&iio_dev_attr_sampling_frequency_available.dev_attr.attr,
 	NULL
 };
@@ -401,6 +426,8 @@ static const struct qmc5883_chip_info qmc5883_chip_info_tbl[] = {
 		.channels = qmc5883_channels,
 		.regval_to_samp_freq = qmc5883_regval_to_samp_freq,
 		.n_regval_to_samp_freq = ARRAY_SIZE(qmc5883_regval_to_samp_freq),
+		.regval_to_oversampling_ratio = qmc5883_regval_to_oversampling_ratio,
+		.n_regval_to_oversampling_ratio = ARRAY_SIZE(qmc5883_regval_to_oversampling_ratio),
 		//.regval_to_nanoscale = NULL,
 		//.n_regval_to_nanoscale = NULL,
 	}
