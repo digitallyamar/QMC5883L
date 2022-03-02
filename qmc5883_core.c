@@ -311,7 +311,7 @@ static int qmc5883_read_raw(struct iio_dev *indio_dev,
 			rval >>= QMC5883_OVERSAMPLING_OFFSET;
 			*val = data->variant->regval_to_oversampling_ratio[rval][0];
 			*val2 = data->variant->regval_to_oversampling_ratio[rval][1];
-			return IIO_VAL_INT_PLUS_MICRO;
+			return IIO_VAL_INT;
 	}
 	return ret;
 }
@@ -347,6 +347,8 @@ static int qmc5883_write_raw_get_fmt(struct iio_dev *indio_dev,
 	switch(mask) {
 		case IIO_CHAN_INFO_SAMP_FREQ:
 			return IIO_VAL_INT_PLUS_MICRO;
+		case IIO_CHAN_INFO_OVERSAMPLING_RATIO:
+			return IIO_VAL_INT;
 		default:
 			return -EINVAL;
 	}
