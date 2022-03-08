@@ -220,10 +220,14 @@ static int qmc5883_get_samp_freq_index(struct qmc5883_data *data,
 {
 	int i;
 
-	for (i = 0; i < data->variant->n_regval_to_samp_freq; i++)
-		if (val == data->variant->regval_to_samp_freq[0][0] &&
+	for (i = 0; i < data->variant->n_regval_to_samp_freq; i++) {
+		pr_info("Amar: get_samp, val = %d, val2=%d\n", val, val2);
+		pr_info("Amar: data->var->regval_freq[i][0] = %d\n", data->variant->regval_to_samp_freq[i][0]);
+		pr_info("Amar: data->var->regval_freq[i][1] = %d\n", data->variant->regval_to_samp_freq[i][1]);
+		if (val == data->variant->regval_to_samp_freq[i][0] &&
 		val2 == data->variant->regval_to_samp_freq[i][1])
 			return i;
+	}
 
 	return -EINVAL;
 }
@@ -343,12 +347,15 @@ static int qmc5883_write_raw(struct iio_dev *indio_dev,
 	switch (mask) {
 		case IIO_CHAN_INFO_SAMP_FREQ:
 			rate = qmc5883_get_samp_freq_index(data, val, val2);
-			if (rate < 0)
+			if (rate < 0) {
+				pr_info("Amar: get_samp rate error\n");
 				return -EINVAL;
+			}
 
 			return qmc5883_set_samp_freq(data, rate);
 
 		default:
+			pr_info("Amar: case default, returning -EINVAL\n");
 			return -EINVAL;
 	}
 }
