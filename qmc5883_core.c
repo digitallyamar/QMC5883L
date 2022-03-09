@@ -138,7 +138,7 @@ static int qmc5883_wait_measurement(struct qmc5883_data *data)
 static int qmc5883_read_measurement(struct qmc5883_data *data,
 				int idx, int *val)
 {
-	s16 values[3];
+	__le16 values[3];
 	int ret;
 
 	mutex_lock(&data->lock);
@@ -158,9 +158,9 @@ static int qmc5883_read_measurement(struct qmc5883_data *data,
 	pr_info("Amar: read_meas++\n");
 
 	for (ret = 0; ret < 3; ret++)
-		pr_info("values[%d] = %d\n", ret, values[ret]);
+		pr_info("values[%d] = %d\n", ret, sign_extend32(le16_to_cpu(values[ret]), 15));
 
-	*val = sign_extend32(values[idx], 15);
+	*val = sign_extend32(le16_to_cpu(values[idx]), 15);
 
 	return IIO_VAL_INT;
 }
@@ -214,6 +214,23 @@ static int qmc5883_set_samp_freq(struct qmc5883_data *data, u8 rate)
 
 	return ret;
 }
+
+/*
+static int qmc5883_set_oversampling_ratio(struct qmc5883_data *data, u8 ratio)
+{
+	int ret;
+
+	pr_info("qmc5883_set_oversampling_ratio++\n");
+
+	mutex_lock(&data->lock);
+	ret = regmap_update_bits(data->regmap, QMC5883_CONTROL_REG_1,
+				QMC5883_OVERSAMPLING_MASK,
+				ratio << QMC5883_OVERSAMPLING_OFFSET);
+	mutex_unlock(&data->lock);
+
+	return ret;
+}
+*/
 
 static int qmc5883_get_samp_freq_index(struct qmc5883_data *data,
 					int val, int val2)
