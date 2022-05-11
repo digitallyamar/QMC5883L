@@ -1,9 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Header file for qmc5883 driver
+ * Header file for QMC5883 magnetometer driver
  *
- * Copyright (C) Amarnath Revanna <amarnath.revanna@gmail.com>
-*/
+ * Copyright (C) 2022 GiraffAI
+ * Author: Amarnath Revanna <amarnath.revanna@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+
 
 #ifndef QMC5883_CORE_H
 #define QMC5883_CORE_H
