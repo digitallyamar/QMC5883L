@@ -65,8 +65,7 @@ static const struct regmap_config qmc5883_i2c_regmap_config = {
 	.cache_type = REGCACHE_RBTREE,
 };
 
-static int qmc5883_i2c_probe(struct i2c_client *cli,
-				const struct i2c_device_id *id)
+static int qmc5883_i2c_probe(struct i2c_client *cli)
 {
 	struct regmap *regmap = devm_regmap_init_i2c(cli,
 			&qmc5883_i2c_regmap_config);
@@ -76,9 +75,7 @@ static int qmc5883_i2c_probe(struct i2c_client *cli,
 	
 	pr_info("Amar -------------> qmc5883_i2c_probe++\n");
 
-	return qmc5883_common_probe(&cli->dev,
-			regmap,
-			id->driver_data, id->name);
+	return qmc5883_common_probe(&cli->dev, regmap, QMC5883_ID, "qmc5883");
 }
 
 /*
@@ -90,11 +87,9 @@ static int qmc5883_i2c_probe_new(struct i2c_client *cli)
 }
 */
 
-static int qmc5883_i2c_remove(struct i2c_client *cli)
+static void qmc5883_i2c_remove(struct i2c_client *cli)
 {
 	pr_info("Amar: qmc5883_i2c_remove--\n");
-
-	return 0;
 }
 
 static const struct of_device_id qmc5883_of_match[] = {
@@ -124,9 +119,7 @@ static struct i2c_driver qmc5883_driver = {
 		.of_match_table = of_match_ptr(qmc5883_of_match),
 	},
 	.probe = qmc5883_i2c_probe,
-	//.probe_new = qmc5883_i2c_probe_new,
 	.remove = qmc5883_i2c_remove,
-	.id_table = qmc5883_idtable,
 };
 
 module_i2c_driver(qmc5883_driver);
@@ -136,3 +129,4 @@ MODULE_AUTHOR("Amarnath Revanna");
 MODULE_DESCRIPTION("QMC5883 i2c driver");
 MODULE_LICENSE("GPL");
 
+MODULE_SOFTDEP("pre: qmc5883_core industrialio industrialio-triggered-buffer regmap_i2c");

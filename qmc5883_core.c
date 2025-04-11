@@ -495,18 +495,28 @@ static const struct qmc5883_chip_info qmc5883_chip_info_tbl[] = {
 	}
 };
 
+
 static int qmc5883_init(struct qmc5883_data *data)
 {
-	int ret;
+        int ret;
 
-	pr_info("qmc5883_init++\n");
+        pr_info("qmc5883_init++\n");
 
-	ret = qmc5883_set_samp_freq(data, QMC5883_RATE_DEFAULT);
-	if (ret < 0)
-		return ret;
+        ret = qmc5883_set_samp_freq(data, QMC5883_RATE_DEFAULT);
+        if (ret < 0)
+                return ret;
 
-	return qmc5883_set_mode(data, QMC5883_MODE_CONTINUOUS);
+        ret = regmap_write(data->regmap, QMC5883_CONTROL_REG_2, 0x00);  // ±2G
+        if (ret < 0) {
+                pr_err("qmc5883_init: regmap_write failed: %d\n", ret);
+                return ret;
+        }
+        pr_info("qmc5883_init: set ctrl_reg2 = 0x00\n");  // New debug print
+
+        return qmc5883_set_mode(data, QMC5883_MODE_CONTINUOUS);
 }
+
+
 
 static const struct iio_info qmc5883_info = {
 	.attrs = &qmc5883_group,
@@ -554,7 +564,7 @@ int qmc5883_common_probe(struct device *dev, struct regmap *regmap,
 	mutex_init(&data->lock);
 
 	//Amar: TODO: Below call changes in latest kernel version
-	ret = of_iio_read_mount_matrix(dev, "mount-matrix", &data->orientation);
+	ret = iio_read_mount_matrix(dev, &data->orientation);
 	if (ret)
 		return ret;
 
