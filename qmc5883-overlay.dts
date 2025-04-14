@@ -15,6 +15,9 @@
                 compatible = "qst,qmc5883";
                 reg = <0x0d>;
                 status = "okay";
+		mount-matrix =  "1", "0", "0",
+				"0", "1", "0",
+				"0", "0", "1";
             };
         };
     };
