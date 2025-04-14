@@ -459,7 +459,7 @@ done:
 			.sign = 's',					\
 			.realbits = 16,					\
 			.storagebits = 16,				\
-			.endianness = IIO_BE				\
+			.endianness = IIO_LE				\
 		},							\
 		.ext_info = qmc5883_ext_info,	\
 	}
